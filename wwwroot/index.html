@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pochi Remote</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    body { margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+    header { display: flex; justify-content: space-between; align-items: center; }
+    #status { font-weight: 700; }
+    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 80ms ease, background 120ms ease;
+    }
+    button:hover { background: #1d4ed8; }
+    button:active { transform: translateY(1px); }
+    #log { background: #0b1224; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; height: 160px; overflow: auto; font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div style="font-size:22px;font-weight:700;">Pochi Remote</div>
+      <div style="opacity:0.75;">Connects to local WebSocket server on this host.</div>
+    </div>
+    <div id="status">disconnected</div>
+  </header>
+
+  <section class="controls">
+    <button id="connect">Connect</button>
+    <button data-command="StartPresentation">Start</button>
+    <button data-command="EndPresentation">End</button>
+    <button data-command="Next">Next ?</button>
+    <button data-command="Prev">? Prev</button>
+    <button data-command="Blackout">Blackout</button>
+    <button data-command="Whiteout">Whiteout</button>
+  </section>
+
+  <section>
+    <div style="margin-bottom:6px;font-weight:600;">Log</div>
+    <div id="log"></div>
+  </section>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+    const connectBtn = document.getElementById('connect');
+    const commandButtons = document.querySelectorAll('button[data-command]');
+
+    let socket;
+
+    const appendLog = (text) => {
+      const time = new Date().toISOString().substring(11, 19);
+      const line = document.createElement('div');
+      line.textContent = `[${time}] ${text}`;
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    const setStatus = (text) => {
+      statusEl.textContent = text;
+    };
+
+    const connect = () => {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        appendLog('WebSocket already connected or connecting.');
+        return;
+      }
+
+      const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+      const url = `${protocol}://${location.host}/ws`;
+      appendLog(`Connecting to ${url} ...`);
+
+      socket = new WebSocket(url);
+      setStatus('connecting');
+
+      socket.onopen = () => {
+        setStatus('connected');
+        appendLog('WebSocket connected.');
+      };
+
+      socket.onclose = (event) => {
+        setStatus('closed');
+        appendLog(`WebSocket closed (${event.code}): ${event.reason || 'no reason'}`);
+      };
+
+      socket.onerror = (err) => {
+        appendLog(`WebSocket error: ${err.message || err}`);
+      };
+
+      socket.onmessage = (event) => {
+        appendLog(`recv: ${event.data}`);
+      };
+    };
+
+    const sendCommand = (command) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        appendLog('Cannot send: socket not connected.');
+        return;
+      }
+
+      const payload = { type: 'command', command, clientId: 'presenter' };
+      socket.send(JSON.stringify(payload));
+      appendLog(`sent: ${payload.command}`);
+    };
+
+    connectBtn.addEventListener('click', connect);
+    commandButtons.forEach(btn => {
+      btn.addEventListener('click', () => sendCommand(btn.dataset.command));
+    });
+
+    // Attempt auto-connect on load for convenience.
+    connect();
+  </script>
+</body>
+</html>
