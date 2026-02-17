@@ -6,3 +6,4 @@
 - Treat messages phrased as "can you ..." or "is it possible ..." as questions/consultations, not task orders.
 - When anything is unclear (the user's message, existing code, required APIs, etc.), explicitly ask the user to clarify instead of guessing.
 - On initialization, read `plan.md` and `tasks.md` to gather context before proceeding.
+- Do not run 'git commit'. Agent is not allowed to perform it.
