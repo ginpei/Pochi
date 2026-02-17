@@ -9,10 +9,15 @@ using Microsoft.Extensions.Primitives;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var urls = builder.Configuration["POCHI_URLS"] ?? "http://0.0.0.0:5000";
+var urls = builder.Configuration["POWERPOCHI_URLS"]
+    ?? builder.Configuration["POCHI_URLS"]
+    ?? "http://0.0.0.0:5000";
 builder.WebHost.UseUrls(urls);
 
-var authToken = builder.Configuration["POCHI_TOKEN"] ?? builder.Configuration["POCHI_PIN"];
+var authToken = builder.Configuration["POWERPOCHI_TOKEN"]
+    ?? builder.Configuration["POWERPOCHI_PIN"]
+    ?? builder.Configuration["POCHI_TOKEN"]
+    ?? builder.Configuration["POCHI_PIN"];
 var serializerOptions = new JsonSerializerOptions
 {
     PropertyNameCaseInsensitive = true
@@ -95,7 +100,7 @@ static string? GetProvidedToken(HttpContext context)
         }
     }
 
-    if (context.Request.Headers.TryGetValue("Pochi-Token", out var headerValues) && !StringValues.IsNullOrEmpty(headerValues))
+    if (context.Request.Headers.TryGetValue("PowerPochi-Token", out var headerValues) && !StringValues.IsNullOrEmpty(headerValues))
     {
         var token = headerValues.ToString();
         if (!string.IsNullOrWhiteSpace(token))
