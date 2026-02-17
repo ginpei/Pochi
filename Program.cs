@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
@@ -19,7 +20,8 @@ var serializerOptions = new JsonSerializerOptions
 
 var app = builder.Build();
 
-var keyboardController = new KeyboardController(app.Logger);
+var keyboardInjector = CreateKeyboardInjector(app.Logger);
+var keyboardController = new KeyboardController(keyboardInjector, app.Logger);
 var dispatcher = new CommandDispatcher(keyboardController, app.Logger);
 
 app.UseDefaultFiles();
@@ -157,6 +159,22 @@ static Task SendTextAsync(WebSocket webSocket, string text, CancellationToken ca
     return webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
 }
 
+static IKeyboardInjector CreateKeyboardInjector(ILogger logger)
+{
+    if (OperatingSystem.IsWindows())
+    {
+        return new WindowsKeyboardInjector(logger);
+    }
+
+    if (OperatingSystem.IsMacOS())
+    {
+        return new MacKeyboardInjector(logger);
+    }
+
+    logger.LogWarning("Unsupported platform for keyboard injection. Commands will be no-op.");
+    return new NoopKeyboardInjector(logger);
+}
+
 sealed class CommandDispatcher
 {
     private readonly IKeyboardController _keyboardController;
@@ -192,13 +210,20 @@ interface IKeyboardController
     Task ExecuteAsync(CommandType command, CancellationToken cancellationToken);
 }
 
+interface IKeyboardInjector
+{
+    Task InjectAsync(IReadOnlyList<KeyStroke> sequence, CancellationToken cancellationToken);
+}
+
 sealed class KeyboardController : IKeyboardController
 {
+    private readonly IKeyboardInjector _injector;
     private readonly ILogger _logger;
     private readonly IReadOnlyDictionary<CommandType, KeyboardAction> _actions;
 
-    public KeyboardController(ILogger logger)
+    public KeyboardController(IKeyboardInjector injector, ILogger logger)
     {
+        _injector = injector;
         _logger = logger;
         _actions = new Dictionary<CommandType, KeyboardAction>
         {
@@ -219,7 +244,7 @@ sealed class KeyboardController : IKeyboardController
         }
 
         _logger.LogInformation("Executing command {Command} -> {Action}", command, action);
-        return Task.CompletedTask;
+        return _injector.InjectAsync(action.Sequence, cancellationToken);
     }
 }
 
@@ -272,4 +297,177 @@ enum CommandType
     EndPresentation,
     Blackout,
     Whiteout
+}
+
+sealed class WindowsKeyboardInjector : IKeyboardInjector
+{
+    private readonly ILogger _logger;
+
+    public WindowsKeyboardInjector(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    public Task InjectAsync(IReadOnlyList<KeyStroke> sequence, CancellationToken cancellationToken)
+    {
+        if (sequence.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var inputs = new INPUT[sequence.Count * 2];
+        var index = 0;
+
+        foreach (var stroke in sequence)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var key = MapVirtualKey(stroke.Key);
+
+            inputs[index++] = CreateKeyInput(key, isKeyUp: false);
+            inputs[index++] = CreateKeyInput(key, isKeyUp: true);
+        }
+
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent != inputs.Length)
+        {
+            var error = Marshal.GetLastWin32Error();
+            _logger.LogError("SendInput sent {Sent}/{Total} inputs. Error: {Error}", sent, inputs.Length, error);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static INPUT CreateKeyInput(ushort virtualKey, bool isKeyUp)
+    {
+        return new INPUT
+        {
+            type = InputType.INPUT_KEYBOARD,
+            U = new InputUnion
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = virtualKey,
+                    wScan = 0,
+                    dwFlags = isKeyUp ? KEYEVENTF.KEYUP : KEYEVENTF.KEYDOWN,
+                    dwExtraInfo = UIntPtr.Zero
+                }
+            }
+        };
+    }
+
+    private static ushort MapVirtualKey(KeyCode key) => key switch
+    {
+        KeyCode.RightArrow => (ushort)VirtualKeyShort.VK_RIGHT,
+        KeyCode.LeftArrow => (ushort)VirtualKeyShort.VK_LEFT,
+        KeyCode.F5 => (ushort)VirtualKeyShort.VK_F5,
+        KeyCode.Escape => (ushort)VirtualKeyShort.VK_ESCAPE,
+        KeyCode.B => (ushort)VirtualKeyShort.VK_B,
+        KeyCode.W => (ushort)VirtualKeyShort.VK_W,
+        _ => throw new ArgumentOutOfRangeException(nameof(key), key, null)
+    };
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    private enum VirtualKeyShort : ushort
+    {
+        VK_LEFT = 0x25,
+        VK_RIGHT = 0x27,
+        VK_ESCAPE = 0x1B,
+        VK_F5 = 0x74,
+        VK_B = 0x42,
+        VK_W = 0x57
+    }
+
+    private enum InputType : uint
+    {
+        INPUT_MOUSE = 0,
+        INPUT_KEYBOARD = 1,
+        INPUT_HARDWARE = 2
+    }
+
+    [Flags]
+    private enum KEYEVENTF : uint
+    {
+        KEYDOWN = 0x0000,
+        EXTENDEDKEY = 0x0001,
+        KEYUP = 0x0002
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public InputType type;
+        public InputUnion U;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public UIntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public KEYEVENTF dwFlags;
+        public uint time;
+        public UIntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
+    }
+}
+
+sealed class MacKeyboardInjector : IKeyboardInjector
+{
+    private readonly ILogger _logger;
+
+    public MacKeyboardInjector(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    public Task InjectAsync(IReadOnlyList<KeyStroke> sequence, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning("macOS keyboard injection not implemented. Ignoring {Count} key strokes.", sequence.Count);
+        return Task.CompletedTask;
+    }
+}
+
+sealed class NoopKeyboardInjector : IKeyboardInjector
+{
+    private readonly ILogger _logger;
+
+    public NoopKeyboardInjector(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    public Task InjectAsync(IReadOnlyList<KeyStroke> sequence, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning("Keyboard injection unavailable on this platform. Ignoring {Count} key strokes.", sequence.Count);
+        return Task.CompletedTask;
+    }
 }
