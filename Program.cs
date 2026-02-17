@@ -1,7 +1,9 @@
-﻿using System.Net.WebSockets;
+﻿using System.Collections.Generic;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +18,9 @@ var serializerOptions = new JsonSerializerOptions
 };
 
 var app = builder.Build();
+
+var keyboardController = new KeyboardController(app.Logger);
+var dispatcher = new CommandDispatcher(keyboardController, app.Logger);
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -62,7 +67,14 @@ app.Map("/ws", async context =>
             continue;
         }
 
-        await SendTextAsync(webSocket, $"command:{command.Command}", context.RequestAborted);
+        var dispatchResult = await dispatcher.DispatchAsync(command, context.RequestAborted);
+        if (!dispatchResult.IsSuccess)
+        {
+            await SendTextAsync(webSocket, $"error:{dispatchResult.Error}", context.RequestAborted);
+            continue;
+        }
+
+        await SendTextAsync(webSocket, $"ok:{command.Command}", context.RequestAborted);
     }
 });
 
@@ -143,6 +155,109 @@ static Task SendTextAsync(WebSocket webSocket, string text, CancellationToken ca
 {
     var bytes = Encoding.UTF8.GetBytes(text);
     return webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+}
+
+sealed class CommandDispatcher
+{
+    private readonly IKeyboardController _keyboardController;
+    private readonly ILogger _logger;
+
+    public CommandDispatcher(IKeyboardController keyboardController, ILogger logger)
+    {
+        _keyboardController = keyboardController;
+        _logger = logger;
+    }
+
+    public async Task<DispatchResult> DispatchAsync(CommandRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _keyboardController.ExecuteAsync(request.Command, cancellationToken);
+            return DispatchResult.Success();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to dispatch command {Command}", request.Command);
+            return DispatchResult.Failure("dispatch failed");
+        }
+    }
+}
+
+interface IKeyboardController
+{
+    Task ExecuteAsync(CommandType command, CancellationToken cancellationToken);
+}
+
+sealed class KeyboardController : IKeyboardController
+{
+    private readonly ILogger _logger;
+    private readonly IReadOnlyDictionary<CommandType, KeyboardAction> _actions;
+
+    public KeyboardController(ILogger logger)
+    {
+        _logger = logger;
+        _actions = new Dictionary<CommandType, KeyboardAction>
+        {
+            [CommandType.Next] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.RightArrow)),
+            [CommandType.Prev] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.LeftArrow)),
+            [CommandType.StartPresentation] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.F5)),
+            [CommandType.EndPresentation] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.Escape)),
+            [CommandType.Blackout] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.B)),
+            [CommandType.Whiteout] = KeyboardAction.Single(KeyStroke.WithKey(KeyCode.W))
+        };
+    }
+
+    public Task ExecuteAsync(CommandType command, CancellationToken cancellationToken)
+    {
+        if (!_actions.TryGetValue(command, out var action))
+        {
+            throw new InvalidOperationException($"Command mapping not found for {command}");
+        }
+
+        _logger.LogInformation("Executing command {Command} -> {Action}", command, action);
+        return Task.CompletedTask;
+    }
+}
+
+readonly record struct DispatchResult(bool IsSuccess, string? Error)
+{
+    public static DispatchResult Success() => new(true, null);
+    public static DispatchResult Failure(string error) => new(false, error);
+}
+
+sealed class KeyboardAction
+{
+    public IReadOnlyList<KeyStroke> Sequence { get; }
+
+    private KeyboardAction(IReadOnlyList<KeyStroke> sequence)
+    {
+        Sequence = sequence;
+    }
+
+    public static KeyboardAction Single(KeyStroke stroke) => new KeyboardAction(new List<KeyStroke> { stroke });
+
+    public override string ToString() => string.Join(", ", Sequence);
+}
+
+readonly record struct KeyStroke(KeyCode Key)
+{
+    public override string ToString() => Key.ToString();
+
+    public static KeyStroke WithKey(KeyCode key) => new(key);
+}
+
+enum KeyCode
+{
+    RightArrow,
+    LeftArrow,
+    F5,
+    Escape,
+    B,
+    W
 }
 
 record CommandEnvelope(string? Type, string? Command, string? ClientId);
