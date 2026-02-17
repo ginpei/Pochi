@@ -11,27 +11,27 @@
 
 ## Architecture Cleanup Plan (Post-MVP)
 
-- [ ] **Structure & layering**
+- [x] **Structure & layering**
    - Split `Program.cs` responsibilities into separate files/namespaces: Hosting (startup/endpoints), Command (parser/dispatcher/contracts), Input (controller/injectors).
    - Keep `Program.cs` as composition root only.
 
-- [ ] **Dependency injection & options**
+- [x] **Dependency injection & options**
    - Register services via DI (`IKeyboardController`, `IKeyboardInjector`, parser/dispatcher).
    - Bind URLs/token/key mappings to options classes; avoid static helpers.
 
-- [ ] **WebSocket handling**
+- [x] **WebSocket handling**
    - Move `/ws` handler to a dedicated handler/service; isolate auth, validation, and error responses.
    - Add result codes/messages for client UX.
 
-- [ ] **Command parsing & dispatch**
+- [x] **Command parsing & dispatch**
    - Create a parser service returning typed result with errors; unit-test command parsing and mappings.
    - Keep command-to-keystroke map configurable (per OS if needed).
 
-- [ ] **Logging & error handling**
+- [x] **Logging & error handling**
    - Standardize structured logs per layer; include clientId and command.
    - Add minimal metrics/hooks (counts per command, failures).
 
-- [ ] **Testability**
+- [x] **Testability**
    - Add unit tests for parser/dispatcher/keyboard mapping with mocked injector.
    - Provide noop injector for tests and unsupported platforms.
 

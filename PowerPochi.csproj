@@ -8,7 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="PowerPochi.Tests\**\*.cs" />
+    <None Remove="PowerPochi.Tests\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include=".github\copilot-instructions.md" />
+    <None Include="PowerPochi.Tests\PowerPochi.Tests.csproj" />
   </ItemGroup>
 
 </Project>
