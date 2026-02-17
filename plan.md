@@ -202,3 +202,6 @@ Future:
   - Next/Prev/Start/End work reliably
 - Low latency via WebSocket
 - Minimum authentication is implemented
+
+---
+
