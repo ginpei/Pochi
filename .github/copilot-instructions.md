@@ -1,5 +1,6 @@
 # Copilot Agent Instructions
 
+- Notify the user after reading task/instruction files.
 - At the start of every interaction, classify the user's message as a task request or a question/consultation.
 - If the message is not a task request, do not modify any files.
 - Treat messages phrased as "can you ..." or "is it possible ..." as questions/consultations, not task orders.
