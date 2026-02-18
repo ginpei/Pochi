@@ -48,12 +48,14 @@ public sealed class WebSocketHandler
         await SendTextAsync(webSocket, "connected", context.RequestAborted);
 
         var buffer = new byte[4096];
-        while (webSocket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
+        while (webSocket.State == WebSocketState.Open)
         {
-            var result = await webSocket.ReceiveAsync(buffer, context.RequestAborted);
+            var result = await webSocket.ReceiveAsync(buffer, CancellationToken.None);
+
             if (result.MessageType == WebSocketMessageType.Close)
             {
-                await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", context.RequestAborted);
+                if (webSocket.State == WebSocketState.CloseReceived)
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
                 break;
             }
 
