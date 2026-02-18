@@ -10,120 +10,89 @@
       background: #0f172a;
       color: #e2e8f0;
     }
-    body { margin: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-    header { display: flex; justify-content: space-between; align-items: center; }
-    #status { font-weight: 700; }
-    .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-    button {
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 14px 16px;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform 80ms ease, background 120ms ease;
-    }
-    button:hover { background: #1d4ed8; }
-    button:active { transform: translateY(1px); }
-    #log { background: #0b1224; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; height: 160px; overflow: auto; font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 13px; }
+    body { margin: 0; padding: 24px; display: flex; min-height: 100vh; box-sizing: border-box; }
+    main { margin: auto; display: flex; flex-direction: column; gap: 20px; align-items: center; width: min(720px, 100%); text-align: center; }
+    h1 { margin: 0; font-size: 28px; }
+    p { margin: 0; opacity: 0.85; }
+    .card { background: #0b1224; border: 1px solid #1f2937; border-radius: 12px; padding: 20px; display: grid; gap: 14px; justify-items: center; width: 100%; }
+    #qr { background: #fff; border-radius: 12px; padding: 12px; }
+    .url { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+    .url a { color: #93c5fd; font-weight: 700; word-break: break-all; }
+    .hint { font-size: 13px; opacity: 0.75; }
+    .button { display: inline-flex; align-items: center; justify-content: center; padding: 14px 18px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 10px; font-weight: 700; transition: transform 80ms ease, background 120ms ease; }
+    .button:hover { background: #1d4ed8; }
+    .button:active { transform: translateY(1px); }
+    .error { color: #fca5a5; }
   </style>
 </head>
 <body>
-  <header>
+  <main>
     <div>
-      <div style="font-size:22px;font-weight:700;">PowerPochi Remote</div>
-      <div style="opacity:0.75;">Connects to local WebSocket server on this host.</div>
+      <h1>PowerPochi Remote</h1>
+      <p>Scan the QR code to open the control panel on your phone.</p>
     </div>
-    <div id="status">disconnected</div>
-  </header>
 
-  <section class="controls">
-    <button id="connect">Connect</button>
-    <button data-command="StartPresentation">Start</button>
-    <button data-command="EndPresentation">End</button>
-    <button data-command="Next">Next ?</button>
-    <button data-command="Prev">? Prev</button>
-    <button data-command="Blackout">Blackout</button>
-    <button data-command="Whiteout">Whiteout</button>
-  </section>
+    <section class="card">
+      <div id="qr" aria-label="QR code"></div>
+      <div class="url">
+        <div class="hint">Control panel URL</div>
+        <a id="access-url" href="#" target="_blank" rel="noreferrer">Loading…</a>
+        <div id="ip-note" class="hint">Detecting this machine's IP address…</div>
+      </div>
+      <div id="error" class="error" hidden></div>
+    </section>
 
-  <section>
-    <div style="margin-bottom:6px;font-weight:600;">Log</div>
-    <div id="log"></div>
-  </section>
+    <a class="button" href="/control.html">Open control panel</a>
+  </main>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
-    const statusEl = document.getElementById('status');
-    const logEl = document.getElementById('log');
-    const connectBtn = document.getElementById('connect');
-    const commandButtons = document.querySelectorAll('button[data-command]');
+    const accessUrlEl = document.getElementById('access-url');
+    const ipNoteEl = document.getElementById('ip-note');
+    const errorEl = document.getElementById('error');
+    const qrContainer = document.getElementById('qr');
 
-    let socket;
+    const setUrl = (url, ip) => {
+      accessUrlEl.textContent = url;
+      accessUrlEl.href = url;
+      ipNoteEl.textContent = ip ? `Using this machine's IP: ${ip}` : 'Using browser-detected host.';
 
-    const appendLog = (text) => {
-      const time = new Date().toISOString().substring(11, 19);
-      const line = document.createElement('div');
-      line.textContent = `[${time}] ${text}`;
-      logEl.appendChild(line);
-      logEl.scrollTop = logEl.scrollHeight;
+      if (window.QRCode && qrContainer) {
+        try {
+          qrContainer.innerHTML = '';
+          new QRCode(qrContainer, { text: url, width: 240, height: 240 });
+        } catch (err) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Failed to render QR code.';
+        }
+      }
     };
 
-    const setStatus = (text) => {
-      statusEl.textContent = text;
-    };
+    const init = async () => {
+      let baseUrl = window.location.origin;
+      let ip = null;
 
-    const connect = () => {
-      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-        appendLog('WebSocket already connected or connecting.');
-        return;
+      try {
+        const response = await fetch('/server-info');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.url) {
+            baseUrl = data.url;
+          }
+          if (data.ip) {
+            ip = data.ip;
+          }
+        }
+      } catch (err) {
+        errorEl.hidden = false;
+        errorEl.textContent = 'Failed to detect host URL, using current address.';
       }
 
-      const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-      const url = `${protocol}://${location.host}/ws`;
-      appendLog(`Connecting to ${url} ...`);
-
-      socket = new WebSocket(url);
-      setStatus('connecting');
-
-      socket.onopen = () => {
-        setStatus('connected');
-        appendLog('WebSocket connected.');
-      };
-
-      socket.onclose = (event) => {
-        setStatus('closed');
-        appendLog(`WebSocket closed (${event.code}): ${event.reason || 'no reason'}`);
-      };
-
-      socket.onerror = (err) => {
-        appendLog(`WebSocket error: ${err.message || err}`);
-      };
-
-      socket.onmessage = (event) => {
-        appendLog(`recv: ${event.data}`);
-      };
+      const controlUrl = `${baseUrl.replace(/\/$/, '')}/control.html`;
+      setUrl(controlUrl, ip);
     };
 
-    const sendCommand = (command) => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        appendLog('Cannot send: socket not connected.');
-        return;
-      }
-
-      const payload = { type: 'command', command, clientId: 'presenter' };
-      socket.send(JSON.stringify(payload));
-      appendLog(`sent: ${payload.command}`);
-    };
-
-    connectBtn.addEventListener('click', connect);
-    commandButtons.forEach(btn => {
-      btn.addEventListener('click', () => sendCommand(btn.dataset.command));
-    });
-
-    // Attempt auto-connect on load for convenience.
-    connect();
+    init();
   </script>
 </body>
 </html>

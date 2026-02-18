@@ -1,4 +1,8 @@
-﻿using Microsoft.Extensions.Options;
+﻿using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Options;
 using PowerPochi.Command;
 using PowerPochi.Diagnostics;
 using PowerPochi.Hosting;
@@ -32,6 +36,7 @@ builder.Services.AddSingleton<CommandMetrics>();
 builder.Services.AddSingleton<WebSocketHandler>();
 
 builder.WebHost.UseUrls(urls);
+builder.WebHost.UseSetting(WebHostDefaults.PreventHostingStartupKey, "true");
 
 var app = builder.Build();
 
@@ -39,6 +44,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 var serverOptions = app.Services.GetRequiredService<IOptions<ServerOptions>>().Value;
+var localIpAddress = GetLocalIPv4();
+var publicUrl = BuildPublicUrl(serverOptions.Urls, localIpAddress);
 
 app.UseWebSockets(new WebSocketOptions
 {
@@ -55,4 +62,73 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.MapGet("/metrics", (CommandMetrics metrics) => Results.Ok(metrics.Snapshot()));
 
+app.MapGet("/server-info", () => Results.Ok(new
+{
+    url = publicUrl ?? serverOptions.Urls,
+    ip = localIpAddress
+}));
+
 app.Run();
+
+static string? GetLocalIPv4()
+{
+    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+    {
+        if (ni.OperationalStatus != OperationalStatus.Up)
+        {
+            continue;
+        }
+
+        if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+        {
+            continue;
+        }
+
+        foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+        {
+            if (addr.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(addr.Address))
+            {
+                return addr.Address.ToString();
+            }
+        }
+    }
+
+    try
+    {
+        foreach (var addr in Dns.GetHostAddresses(Dns.GetHostName()))
+        {
+            if (addr.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(addr))
+            {
+                return addr.ToString();
+            }
+        }
+    }
+    catch
+    {
+    }
+
+    return null;
+}
+
+static string? BuildPublicUrl(string urls, string? ip)
+{
+    if (string.IsNullOrWhiteSpace(ip))
+    {
+        return null;
+    }
+
+    var parts = urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var firstUrl = parts.Length > 0 ? parts[0] : urls;
+
+    if (Uri.TryCreate(firstUrl, UriKind.Absolute, out var uri))
+    {
+        var builder = new UriBuilder(uri)
+        {
+            Host = ip
+        };
+
+        return builder.Uri.ToString().TrimEnd('/');
+    }
+
+    return null;
+}
