@@ -48,41 +48,52 @@ public sealed class WebSocketHandler
         await SendTextAsync(webSocket, "connected", context.RequestAborted);
 
         var buffer = new byte[4096];
-        while (webSocket.State == WebSocketState.Open)
+        try
         {
-            var result = await webSocket.ReceiveAsync(buffer, CancellationToken.None);
-
-            if (result.MessageType == WebSocketMessageType.Close)
+            while (webSocket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
             {
-                if (webSocket.State == WebSocketState.CloseReceived)
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
-                break;
-            }
+                var result = await webSocket.ReceiveAsync(buffer, context.RequestAborted);
 
-            var message = Encoding.UTF8.GetString(buffer.AsSpan(0, result.Count));
-            var parseResult = _parser.Parse(message);
-            if (!parseResult.IsSuccess || parseResult.Command is null)
-            {
-                var error = parseResult.Error ?? "invalid message";
-                _metrics.RecordParseFailure();
-                _logger.LogWarning("Parse failed: {Error}; Client {ClientIp}", error, context.Connection.RemoteIpAddress);
-                await SendTextAsync(webSocket, $"error:{error}", context.RequestAborted);
-                continue;
-            }
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    if (webSocket.State == WebSocketState.CloseReceived)
+                        await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "bye", context.RequestAborted);
+                    break;
+                }
 
-            _logger.LogInformation("Dispatching command {Command} from {ClientId}", parseResult.Command.Command, parseResult.Command.ClientId);
-            var dispatchResult = await _dispatcher.DispatchAsync(parseResult.Command, context.RequestAborted);
-            if (!dispatchResult.IsSuccess)
-            {
-                _metrics.RecordFailure(parseResult.Command.Command);
-                _logger.LogWarning("Dispatch failed for {Command} from {ClientId}: {Error}", parseResult.Command.Command, parseResult.Command.ClientId, dispatchResult.Error);
-                await SendTextAsync(webSocket, $"error:{dispatchResult.Error}", context.RequestAborted);
-                continue;
-            }
+                var message = Encoding.UTF8.GetString(buffer.AsSpan(0, result.Count));
+                var parseResult = _parser.Parse(message);
+                if (!parseResult.IsSuccess || parseResult.Command is null)
+                {
+                    var error = parseResult.Error ?? "invalid message";
+                    _metrics.RecordParseFailure();
+                    _logger.LogWarning("Parse failed: {Error}; Client {ClientIp}", error, context.Connection.RemoteIpAddress);
+                    await SendTextAsync(webSocket, $"error:{error}", context.RequestAborted);
+                    continue;
+                }
 
-            _metrics.RecordSuccess(parseResult.Command.Command);
-            _logger.LogInformation("Command {Command} from {ClientId} executed", parseResult.Command.Command, parseResult.Command.ClientId);
-            await SendTextAsync(webSocket, $"ok:{parseResult.Command.Command}", context.RequestAborted);
+                _logger.LogInformation("Dispatching command {Command} from {ClientId}", parseResult.Command.Command, parseResult.Command.ClientId);
+                var dispatchResult = await _dispatcher.DispatchAsync(parseResult.Command, context.RequestAborted);
+                if (!dispatchResult.IsSuccess)
+                {
+                    _metrics.RecordFailure(parseResult.Command.Command);
+                    _logger.LogWarning("Dispatch failed for {Command} from {ClientId}: {Error}", parseResult.Command.Command, parseResult.Command.ClientId, dispatchResult.Error);
+                    await SendTextAsync(webSocket, $"error:{dispatchResult.Error}", context.RequestAborted);
+                    continue;
+                }
+
+                _metrics.RecordSuccess(parseResult.Command.Command);
+                _logger.LogInformation("Command {Command} from {ClientId} executed", parseResult.Command.Command, parseResult.Command.ClientId);
+                await SendTextAsync(webSocket, $"ok:{parseResult.Command.Command}", context.RequestAborted);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("WebSocket aborted by client {RemoteIp}", context.Connection.RemoteIpAddress);
+        }
+        catch (WebSocketException ex)
+        {
+            _logger.LogWarning(ex, "WebSocket reset by client {RemoteIp}", context.Connection.RemoteIpAddress);
         }
     }
 
